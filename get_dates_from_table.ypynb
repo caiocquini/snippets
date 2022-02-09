@@ -1,0 +1,49 @@
+def get_time_interval(folder_name: str
+                     ,bucket_name: str
+                     ,prefix_path: str):
+    
+    '''
+    Function used to define update interval based on the latest available information in 'folder_name'.
+    
+    Args:
+        folder_name: Where final table will be saved and where last table update (if exists) should be stored.
+        bucket_name: AWS bucket where foulder_name is stored.
+        prefix_path: Path to folder_name inside bucket
+        
+    Returns: dataframe df_time_interval, with following features
+        start_time: Table latest update to ensure the continuity of historical information. 
+            NOTE: If there is no existant table, start_time will receive first available date from price history.
+            This way, running the code sequentially will gather all available information.
+        end_time: 24 hours after start_time. 
+            This way we can ensure the 24 hours window for every table update, regardless the starting point chosen.
+        
+    '''
+    #to ensure correct format in folder_name
+    if not folder_name.endswith('/'):
+        folder_name = folder_name +'/'
+        
+    s3_client = boto3.client('s3')
+    result = s3_client.list_objects(Bucket= bucket_name
+                                    ,Prefix= prefix_path
+                                    ,Delimiter ='')
+    contents = result.get('Contents')
+        
+    # Sweeping contents in given path to find folder_name
+    for content in contents:
+        if folder_name in content.get('Key'):
+            #When there is a table in the given path
+            df_time_interval = (read_hudi_parquet('s3://40-ze-datalake-sandbox/01_projects/02_pricing/02_development/feature_store/product_price_history')
+                                .select('datetime_brt')
+                                .agg(sf.max('datetime_brt')
+                                        .alias('start_time')))
+            df_time_interval = df_time_interval.withColumn('end_time', df_time_interval.start_time + sf.expr('INTERVAL 24 HOURS'))
+            break
+        else:
+            #Using information from price_history_table
+            df_time_interval = (read_hudi_parquet('s3://30-ze-datalake-raw/history_price/history_price_table_prod/')
+                                .select('update_date')
+                                .agg(sf.min('update_date')
+                                        .alias('start_time')))
+            df_time_interval = df_time_interval.withColumn('end_time', df_time_interval.start_time + sf.expr('INTERVAL 24 HOURS'))        
+            
+    return df_time_interval
